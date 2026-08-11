@@ -22,6 +22,8 @@ from pathlib import Path
 
 import anthropic
 
+from provider_runtime import create_anthropic_client, resolve_model
+
 from config import (
     BUILDER_TEMPERATURE,
     GENERATOR_MODEL,
@@ -364,7 +366,8 @@ class TaskBuilder:
         self.tasks_dir = tasks_dir
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.client = anthropic.Anthropic()
+        self.target = resolve_model("anthropic", model)
+        self.client = create_anthropic_client(self.target)
 
         # contatore progressivo per macro_area
         self._counters: dict[str, int] = {}
@@ -459,7 +462,7 @@ class TaskBuilder:
         for attempt in range(1, self.max_retries + 1):
             try:
                 response = self.client.messages.create(
-                    model=self.model,
+                    model=self.target.api_model,
                     max_tokens=1000,
                     system=CRITERIA_SYSTEM,
                     messages=[{"role": "user", "content": prompt}],

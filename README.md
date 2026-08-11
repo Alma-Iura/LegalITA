@@ -85,8 +85,9 @@ PASS/FAIL criteria attached to each reasoning task. The second measures whether
 the model notices that documents invoked by the question were not supplied,
 instead of inventing their contents or giving document-specific advice.
 
-These runs still require API keys for the evaluated model and the configured
-judge or judges. Citation grounding and Structural Gold v3 are not
+These runs still require credentials for the selected backend: first-party
+Anthropic/OpenAI keys in `native` mode, or an Amazon Bedrock API key in
+`bedrock` mode. Citation grounding and Structural Gold v3 are not
 reproducible from this repository: their implementation depends on private
 Pinecone indexes, structured S3 documents, and deployment credentials, and is
 not distributed here. Always run the benchmark with
@@ -167,8 +168,9 @@ che i documenti richiamati dalla domanda non sono stati forniti, invece di
 inventarne il contenuto o proporre una strategia fondata su atti che non ha
 potuto leggere.
 
-Le due esecuzioni richiedono comunque le chiavi API del modello valutato e del
-judge, o dei judge, configurati. Il citation grounding e Structural Gold v3
+Le due esecuzioni richiedono credenziali per il backend configurato: chiavi
+Anthropic/OpenAI in modalita `native`, oppure una Amazon Bedrock API key in
+modalita `bedrock`. Il citation grounding e Structural Gold v3
 non sono riproducibili da questo repository: la loro implementazione dipende
 da indici Pinecone privati, documenti strutturati in S3 e credenziali di
 deployment, e non è distribuita qui. Il benchmark va sempre eseguito con
@@ -182,13 +184,41 @@ della loro non replicabilità sono documentati in
 pip install -e .
 ```
 
-Pipelines that call external providers need a local `.env` file in the project
-root:
+Pipelines that call Anthropic/OpenAI models support two runtime backends.
+Create a local `.env` file in the project root (see `.env.example`).
+
+First-party APIs remain the backward-compatible default:
 
 ```text
+LLM_BACKEND=native
 ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
 ```
+
+Amazon Bedrock can be selected without native Anthropic/OpenAI API keys:
+
+```text
+LLM_BACKEND=bedrock
+AWS_BEARER_TOKEN_BEDROCK=...
+BEDROCK_REGION=us-east-2
+BEDROCK_ANTHROPIC_SCOPE=us
+```
+
+In Bedrock mode LegalITA preserves the logical model names used by CLI/results
+and maps them only at request time:
+
+```text
+claude-sonnet-4-6 -> <scope>.anthropic.claude-sonnet-4-6
+claude-opus-4-8   -> <scope>.anthropic.claude-opus-4-8
+gpt-5.5           -> openai.gpt-5.5
+```
+
+Claude traffic uses Amazon Bedrock Runtime through the Anthropic Bedrock SDK;
+GPT-5.5 uses the Bedrock Mantle OpenAI-compatible endpoint derived from the
+selected Region. Gemini and Novita keep using their existing endpoints. Models
+without an explicit Bedrock mapping fail fast instead of silently changing
+provider or model identity. See `BEDROCK_CHANGES.md` for architecture, tests,
+limitations and official AWS references.
 
 Pinecone index names, S3 bucket names, S3 prefixes, AWS profiles, and Aptus
 hosts are local deployment configuration. Provide them through environment

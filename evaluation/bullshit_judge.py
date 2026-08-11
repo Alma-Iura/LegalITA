@@ -20,7 +20,6 @@ import anthropic
 from openai import APIConnectionError as OpenAIAPIConnectionError
 from openai import APIError as OpenAIAPIError
 from openai import APITimeoutError as OpenAIAPITimeoutError
-from openai import OpenAI
 from openai import RateLimitError as OpenAIRateLimitError
 from pydantic import BaseModel, Field, field_validator
 
@@ -31,6 +30,7 @@ from config import (
     JUDGE_TEMPERATURE,
 )
 from evaluation.judge import _load_json_object, _normalize_verdict_values, _temperature_kwargs
+from provider_runtime import create_anthropic_client, create_openai_client, resolve_model
 from schemas import ConsensusMethod, JudgeId, JudgeProvider, JudgeVote
 from usage_tracking import aggregate_model_call_metrics
 
@@ -272,6 +272,25 @@ def _safe_error_message(error: BaseException | str) -> str:
     return f"{label}: {message}" if message else label
 
 
+def _openai_response_text(response: Any) -> str:
+    direct = getattr(response, "output_text", None)
+    if direct:
+        return str(direct).strip()
+
+    parts: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        content = getattr(item, "content", None)
+        if content is None and isinstance(item, dict):
+            content = item.get("content")
+        for part in content or []:
+            text = getattr(part, "text", None)
+            if text is None and isinstance(part, dict):
+                text = part.get("text")
+            if text:
+                parts.append(str(text))
+    return "".join(parts).strip()
+
+
 def _openai_refusal(response: Any) -> str | None:
     output = getattr(response, "output", None) or []
     for item in output:
@@ -406,7 +425,8 @@ class AnthropicBullshitJudge:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.client = client or anthropic.Anthropic()
+        self.target = resolve_model("anthropic", model)
+        self.client = client or create_anthropic_client(self.target)
 
     def evaluate_vote(
         self,
@@ -423,7 +443,7 @@ class AnthropicBullshitJudge:
             attempts = attempt
             try:
                 request = {
-                    "model": self.model,
+                    "model": self.target.api_model,
                     "max_tokens": self.max_tokens,
                     "system": SYSTEM_PROMPT,
                     "messages": [{"role": "user", "content": prompt}],
@@ -518,7 +538,8 @@ class OpenAIBullshitJudge:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.client = client or OpenAI()
+        self.target = resolve_model("openai", model)
+        self.client = client or create_openai_client(self.target)
 
     def evaluate_vote(
         self,
@@ -535,30 +556,46 @@ class OpenAIBullshitJudge:
             attempts = attempt
             try:
                 request = {
-                    "model": self.model,
+                    "model": self.target.api_model,
                     "input": [
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": prompt},
                     ],
-                    "text_format": _JudgeOutput,
                     "max_output_tokens": self.max_tokens,
                     "store": False,
                     **_temperature_kwargs(self.provider, self.model, self.temperature),
                 }
-                response = self.client.responses.parse(**request)
-                refusal = _openai_refusal(response)
-                if refusal:
-                    last_error = f"OpenAI refusal: {refusal}"
-                    self._sleep_before_retry(attempt, "Refusal OpenAI")
-                    continue
+                if self.target.backend == "bedrock":
+                    response = self.client.responses.create(**request)
+                    refusal = _openai_refusal(response)
+                    if refusal:
+                        last_error = f"OpenAI refusal: {refusal}"
+                        self._sleep_before_retry(attempt, "Refusal OpenAI")
+                        continue
+                    text = _openai_response_text(response)
+                    parsed = parse_judge_output(text) if text else None
+                    if parsed is None:
+                        last_error = "output JSON mancante o non valido"
+                        self._sleep_before_retry(attempt, "Output assente")
+                        continue
+                else:
+                    response = self.client.responses.parse(
+                        **request,
+                        text_format=_JudgeOutput,
+                    )
+                    refusal = _openai_refusal(response)
+                    if refusal:
+                        last_error = f"OpenAI refusal: {refusal}"
+                        self._sleep_before_retry(attempt, "Refusal OpenAI")
+                        continue
 
-                parsed = getattr(response, "output_parsed", None)
-                if parsed is None:
-                    last_error = "output_parsed assente"
-                    self._sleep_before_retry(attempt, "Output assente")
-                    continue
-                if isinstance(parsed, dict):
-                    parsed = _JudgeOutput.model_validate(parsed)
+                    parsed = getattr(response, "output_parsed", None)
+                    if parsed is None:
+                        last_error = "output_parsed assente"
+                        self._sleep_before_retry(attempt, "Output assente")
+                        continue
+                    if isinstance(parsed, dict):
+                        parsed = _JudgeOutput.model_validate(parsed)
 
                 return BullshitJudgeVote(
                     judge_id=self.judge_id,

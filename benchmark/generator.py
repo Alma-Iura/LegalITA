@@ -22,6 +22,8 @@ from typing import Any
 
 import anthropic
 
+from provider_runtime import create_anthropic_client, resolve_model
+
 from config import (
     GENERATOR_MODEL,
     MAX_SOURCE_PRINCIPLES,
@@ -220,7 +222,8 @@ class QueryGenerator:
         self.model = model
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.client = anthropic.Anthropic()
+        self.target = resolve_model("anthropic", model)
+        self.client = create_anthropic_client(self.target)
 
     def _build_prompt(self, provvedimento: Provvedimento) -> str:
         """
@@ -268,7 +271,7 @@ class QueryGenerator:
         for attempt in range(1, self.max_retries + 1):
             try:
                 response = self.client.messages.create(
-                    model=self.model,
+                    model=self.target.api_model,
                     max_tokens=400,
                     system=SYSTEM_PROMPT,
                     messages=[{"role": "user", "content": prompt}],

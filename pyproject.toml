@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = [
-    "anthropic>=0.40,<1.0",
+    "anthropic[bedrock]>=0.98.1,<1.0",
     "openai>=1.40,<2.0",
     "pydantic>=2.6,<3.0",
     "pandas>=2.2,<3.0",
@@ -18,11 +18,12 @@ dependencies = [
     "seaborn>=0.13,<0.14",
     "tqdm>=4.66,<5.0",
     "python-dotenv>=1.0,<2.0",
+    "boto3>=1.40,<2.0",
 ]
 
 [tool.setuptools]
 # Moduli flat nella root del progetto
-py-modules = ["config", "schemas", "taxonomy", "build_corpus", "run_benchmark", "charts", "usage_tracking", "model_query", "model_request_config", "model_runtime"]
+py-modules = ["config", "schemas", "taxonomy", "build_corpus", "run_benchmark", "charts", "usage_tracking", "model_query", "model_request_config", "model_runtime", "provider_runtime"]
 
 [tool.setuptools.packages.find]
 # Package veri e propri

@@ -9,6 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from provider_runtime import (
+    SUPPORTED_LLM_BACKENDS,
+    get_bedrock_anthropic_scope,
+    get_bedrock_region,
+    get_llm_backend,
+    is_bedrock_model_supported,
+)
+
 from taxonomy import (
     CANONICAL_MACRO_AREAS,
     MACRO_AREA_LABELS,
@@ -191,21 +199,47 @@ def validate_judge_runtime_config(config: JudgeRuntimeConfig) -> None:
             f"{config.strategy!r}. Valori ammessi: {', '.join(SUPPORTED_JUDGE_STRATEGIES)}"
         )
 
+    try:
+        backend = get_llm_backend()
+    except RuntimeError as exc:
+        raise RuntimeError(f"Configurazione judge non valida: {exc}") from exc
+
     endpoints = [config.judge_a]
     if config.strategy == "adaptive_majority":
         endpoints.extend([config.judge_b, config.judge_c])
 
     errors: list[str] = []
+    if backend not in SUPPORTED_LLM_BACKENDS:
+        errors.append(f"LLM_BACKEND={backend!r} non supportato")
+
+    if backend == "bedrock":
+        if not os.environ.get("AWS_BEARER_TOKEN_BEDROCK"):
+            errors.append("AWS_BEARER_TOKEN_BEDROCK mancante per LLM_BACKEND=bedrock")
+        try:
+            get_bedrock_region()
+            get_bedrock_anthropic_scope()
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
     for endpoint in endpoints:
         if endpoint.provider not in SUPPORTED_JUDGE_PROVIDERS:
             errors.append(
                 f"JUDGE_{endpoint.judge_id}_PROVIDER={endpoint.provider!r} non supportato"
             )
+            continue
         if not endpoint.model:
             errors.append(f"JUDGE_{endpoint.judge_id}_MODEL mancante")
-        key_name = _api_key_name(endpoint.provider)
-        if key_name and not os.environ.get(key_name):
-            errors.append(f"{key_name} mancante per Judge {endpoint.judge_id}")
+            continue
+
+        if backend == "native":
+            key_name = _api_key_name(endpoint.provider)
+            if key_name and not os.environ.get(key_name):
+                errors.append(f"{key_name} mancante per Judge {endpoint.judge_id}")
+        elif not is_bedrock_model_supported(endpoint.provider, endpoint.model):
+            errors.append(
+                f"Judge {endpoint.judge_id}: modello {endpoint.provider}/{endpoint.model} "
+                "non mappato su Amazon Bedrock"
+            )
 
     if errors:
         raise RuntimeError("Configurazione judge non valida: " + "; ".join(errors))

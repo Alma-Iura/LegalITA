@@ -45,7 +45,12 @@ def is_non_retryable_model_error(exc: Exception) -> bool:
         return True
     if isinstance(exc, ValueError) and ANTHROPIC_STREAMING_REQUIRED_ERROR in message:
         return True
-    if isinstance(exc, RuntimeError) and "API_KEY non impostata" in message:
+    if isinstance(exc, RuntimeError) and (
+        "API_KEY non impostata" in message
+        or "AWS_BEARER_TOKEN_BEDROCK" in message
+        or "non mappato su Amazon Bedrock" in message
+        or "LLM_BACKEND=" in message
+    ):
         return True
     return False
 

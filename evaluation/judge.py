@@ -13,11 +13,11 @@ import anthropic
 from openai import APIConnectionError as OpenAIAPIConnectionError
 from openai import APIError as OpenAIAPIError
 from openai import APITimeoutError as OpenAIAPITimeoutError
-from openai import OpenAI
 from openai import RateLimitError as OpenAIRateLimitError
 from pydantic import BaseModel, ValidationError
 
 from config import JUDGE_MAX_TOKENS, JUDGE_MODEL, JUDGE_RETRIES, JUDGE_TEMPERATURE
+from provider_runtime import create_anthropic_client, create_openai_client, resolve_model
 from schemas import ConsensusResult, JudgeId, JudgeProvider, JudgeVerdict, JudgeVote
 
 log = logging.getLogger(__name__)
@@ -302,7 +302,8 @@ class AnthropicJudge:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.client = client or anthropic.Anthropic()
+        self.target = resolve_model("anthropic", model)
+        self.client = client or create_anthropic_client(self.target)
 
     def evaluate(
         self,
@@ -330,7 +331,7 @@ class AnthropicJudge:
             attempts = attempt
             try:
                 request = {
-                    "model": self.model,
+                    "model": self.target.api_model,
                     "max_tokens": self.max_tokens,
                     "system": JUDGE_SYSTEM,
                     "messages": [{"role": "user", "content": prompt}],
@@ -422,7 +423,8 @@ class OpenAIJudge:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.client = client or OpenAI()
+        self.target = resolve_model("openai", model)
+        self.client = client or create_openai_client(self.target)
 
     def evaluate(
         self,
@@ -447,32 +449,51 @@ class OpenAIJudge:
             attempts = attempt
             try:
                 request = {
-                    "model": self.model,
+                    "model": self.target.api_model,
                     "input": [
                         {"role": "system", "content": JUDGE_SYSTEM},
                         {"role": "user", "content": prompt},
                     ],
-                    "text_format": JudgeDecision,
                     "max_output_tokens": self.max_tokens,
                     "store": False,
                     **_temperature_kwargs(self.provider, self.model, self.temperature),
                 }
-                response = self.client.responses.parse(**request)
-                refusal = _openai_refusal(response)
-                if refusal:
-                    last_error = f"OpenAI refusal: {refusal}"
-                    log.warning("Refusal OpenAI Judge %s (tentativo %d)", self.judge_id, attempt)
-                    self._sleep_before_retry(attempt, "Refusal OpenAI")
-                    continue
+                if self.target.backend == "bedrock":
+                    # Bedrock Mantle does not guarantee the SDK's parse/text_format
+                    # helper. The prompt already requires JSON, so parse and validate
+                    # the normal Responses API text locally.
+                    response = self.client.responses.create(**request)
+                    refusal = _openai_refusal(response)
+                    if refusal:
+                        last_error = f"OpenAI refusal: {refusal}"
+                        log.warning("Refusal OpenAI Judge %s (tentativo %d)", self.judge_id, attempt)
+                        self._sleep_before_retry(attempt, "Refusal OpenAI")
+                        continue
+                    text = _openai_response_text(response)
+                    if not text:
+                        last_error = "output_text assente"
+                        self._sleep_before_retry(attempt, "Output assente")
+                        continue
+                    decision = _decision_from_any(_load_json_object(text))
+                else:
+                    response = self.client.responses.parse(
+                        **request,
+                        text_format=JudgeDecision,
+                    )
+                    refusal = _openai_refusal(response)
+                    if refusal:
+                        last_error = f"OpenAI refusal: {refusal}"
+                        log.warning("Refusal OpenAI Judge %s (tentativo %d)", self.judge_id, attempt)
+                        self._sleep_before_retry(attempt, "Refusal OpenAI")
+                        continue
 
-                parsed = getattr(response, "output_parsed", None)
-                if parsed is None:
-                    last_error = "output_parsed assente"
-                    log.warning("OpenAI output_parsed assente per Judge %s (tentativo %d)", self.judge_id, attempt)
-                    self._sleep_before_retry(attempt, "Output assente")
-                    continue
-
-                decision = _decision_from_any(parsed)
+                    parsed = getattr(response, "output_parsed", None)
+                    if parsed is None:
+                        last_error = "output_parsed assente"
+                        log.warning("OpenAI output_parsed assente per Judge %s (tentativo %d)", self.judge_id, attempt)
+                        self._sleep_before_retry(attempt, "Output assente")
+                        continue
+                    decision = _decision_from_any(parsed)
                 return JudgeVote(
                     judge_id=self.judge_id,
                     provider=self.provider,
@@ -518,6 +539,25 @@ class OpenAIJudge:
         delay = self.base_delay * (2 ** (attempt - 1))
         log.warning("%s Judge %s; attendo %.1fs (tentativo %d)", label, self.judge_id, delay, attempt)
         time.sleep(delay)
+
+
+def _openai_response_text(response: Any) -> str:
+    direct = getattr(response, "output_text", None)
+    if direct:
+        return str(direct).strip()
+
+    parts: list[str] = []
+    for item in getattr(response, "output", None) or []:
+        content = getattr(item, "content", None)
+        if content is None and isinstance(item, dict):
+            content = item.get("content")
+        for part in content or []:
+            text = getattr(part, "text", None)
+            if text is None and isinstance(part, dict):
+                text = part.get("text")
+            if text:
+                parts.append(str(text))
+    return "".join(parts).strip()
 
 
 def _openai_refusal(response: Any) -> str | None:

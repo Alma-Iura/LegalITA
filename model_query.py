@@ -14,7 +14,6 @@ import os
 import time
 from collections.abc import Callable
 
-import anthropic
 import config as benchmark_config
 import openai
 
@@ -25,6 +24,7 @@ from model_request_config import (
     novita_completion_kwargs,
     openai_completion_kwargs,
 )
+from provider_runtime import create_anthropic_client, create_openai_client, resolve_model
 from model_runtime import (
     anthropic_response_text,
     is_non_retryable_model_error,
@@ -117,9 +117,11 @@ def query_anthropic(model: str, query: str) -> str:
 
 
 def query_anthropic_with_metrics(model: str, query: str) -> ModelCallResult:
-    client = anthropic.Anthropic()
+    target = resolve_model("anthropic", model)
+    client = create_anthropic_client(target)
     started_at = time.perf_counter()
     request = default_anthropic_message_kwargs(model, query)
+    request["model"] = target.api_model
     response = stream_anthropic_message(
         client,
         logger=log,
@@ -158,11 +160,12 @@ def query_openai(model: str, query: str) -> str:
 
 
 def query_openai_with_metrics(model: str, query: str) -> ModelCallResult:
-    client = openai.OpenAI()
+    target = resolve_model("openai", model)
+    client = create_openai_client(target)
     started_at = time.perf_counter()
-    response = client.chat.completions.create(
-        **default_openai_completion_kwargs(model, query),
-    )
+    request = default_openai_completion_kwargs(model, query)
+    request["model"] = target.api_model
+    response = client.chat.completions.create(**request)
     content = response.choices[0].message.content
     if content is None:
         raise ValueError("Risposta OpenAI priva di contenuto testuale.")

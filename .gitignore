@@ -9,6 +9,7 @@ _incoming/
 # Credenziali
 .env
 .env.*
+!.env.example
 
 # Package / build
 *.egg-info/
@@ -21,7 +22,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
-tests/
 .tmp/
 
 # OS / editor
