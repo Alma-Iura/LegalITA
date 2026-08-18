@@ -26,7 +26,7 @@ except ImportError:
     # Lo scoring esterno viene eseguito senza citation grounding.
     PineconeCitationResolver = None
     CitationExistenceService = None
-from evaluation.judge import Judge, create_judge_from_config
+from evaluation.judge import create_judge_from_config
 from evaluation.scoring import score_batch, summarize_batch_scores
 from run_benchmark import load_tasks, save_scores, save_summary, validate_citation_runtime_config
 
@@ -121,11 +121,8 @@ def run_external_scoring(
     judge_model: str,
     area: str | None = None,
     judge_strategy: str | None = None,
-    judge_a_provider: str | None = None,
     judge_a_model: str | None = None,
-    judge_b_provider: str | None = None,
     judge_b_model: str | None = None,
-    judge_c_provider: str | None = None,
     judge_c_model: str | None = None,
 ) -> Path:
     log.info("VERSIONE V2 ATTIVA — normalizzazione tipografica CSV/task abilitata")
@@ -178,11 +175,8 @@ def run_external_scoring(
 
     judge_config = build_judge_runtime_config(
         judge_strategy=judge_strategy,
-        judge_a_provider=judge_a_provider,
         judge_a_model=judge_a_model,
-        judge_b_provider=judge_b_provider,
         judge_b_model=judge_b_model,
-        judge_c_provider=judge_c_provider,
         judge_c_model=judge_c_model,
         legacy_judge_model=judge_model,
     )
@@ -198,10 +192,7 @@ def run_external_scoring(
         judge_config.judge_c.provider,
         judge_config.judge_c.model or "-",
     )
-    if judge_config.strategy == "single" and judge_config.judge_a.provider == "anthropic":
-        judge = Judge(model=judge_config.judge_a.model)
-    else:
-        judge = create_judge_from_config(judge_config)
+    judge = create_judge_from_config(judge_config)
     citation_service = (
         CitationExistenceService(
             resolver=PineconeCitationResolver(index_name=index_name),
@@ -282,14 +273,11 @@ if __name__ == "__main__":
         "--judge",
         type=str,
         default=JUDGE_MODEL,
-        help="Alias legacy per il modello del Judge A (default: valore in config.py).",
+        help="Alias legacy per il modello del Judge A (default: valore in config.py, formato namespace:model).",
     )
     parser.add_argument("--judge-strategy", choices=["single", "adaptive_majority"], default=None)
-    parser.add_argument("--judge-a-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-a-model", default=None)
-    parser.add_argument("--judge-b-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-b-model", default=None)
-    parser.add_argument("--judge-c-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-c-model", default=None)
     parser.add_argument(
         "--area",
@@ -305,10 +293,7 @@ if __name__ == "__main__":
         judge_model=args.judge,
         area=args.area,
         judge_strategy=args.judge_strategy,
-        judge_a_provider=args.judge_a_provider,
         judge_a_model=args.judge_a_model,
-        judge_b_provider=args.judge_b_provider,
         judge_b_model=args.judge_b_model,
-        judge_c_provider=args.judge_c_provider,
         judge_c_model=args.judge_c_model,
     )

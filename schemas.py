@@ -91,7 +91,7 @@ class BenchmarkTask(BaseModel):
 # ---------------------------------------------------------------------------
 
 JudgeId = Literal["A", "B", "C"]
-JudgeProvider = Literal["anthropic", "openai"]
+JudgeProvider = str
 JudgeVerdict = Literal["pass", "fail"]
 ConsensusVerdict = Literal["pass", "fail", "unresolved"]
 JudgeStatus = Literal["ok", "error"]

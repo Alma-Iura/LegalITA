@@ -1,35 +1,22 @@
-"""
-Layer condiviso di interrogazione dei modelli sotto esame.
+"""Shared model querying layer using namespaced provider registry targets."""
 
-Contiene gli adapter provider (Anthropic, OpenAI, Gemini via endpoint
-OpenAI-compatibile, Novita) e il ciclo di retry con backoff esponenziale
-usati da run_benchmark.py e run_bullshit_v2.py. I runner mantengono nel
-proprio namespace gli alias storici (_query_anthropic, ...) e il routing
-per prefisso, cosi' i test possono sostituire i singoli adapter sul modulo
-runner senza conoscere questo layer.
-"""
+from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Callable
+from typing import Protocol
 
 import config as benchmark_config
-import openai
 
 from config import MODEL_MAX_TOKENS
-from model_request_config import (
-    anthropic_message_kwargs,
-    gemini_completion_kwargs,
-    novita_completion_kwargs,
-    openai_completion_kwargs,
-)
-from provider_runtime import create_anthropic_client, create_openai_client, resolve_model
+from model_request_config import anthropic_message_kwargs, openai_completion_kwargs
 from model_runtime import (
     anthropic_response_text,
     is_non_retryable_model_error,
     stream_anthropic_message,
 )
+from provider_runtime import ResolvedModel, create_anthropic_client, create_openai_client, resolve_model
 from usage_tracking import (
     ModelCallResult,
     build_model_call_metrics,
@@ -39,11 +26,15 @@ from usage_tracking import (
 
 log = logging.getLogger(__name__)
 
-NOVITA_PROVIDERS = ("deepseek/", "meta-llama/", "qwen/", "mistralai/", "zai-org/")
-NOVITA_BASE_URL = "https://api.novita.ai/openai"
-NOVITA_GLM_52_MAX_TOKENS = 65536
-GEMINI_PROVIDER_PREFIX = "gemini-"
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+class ModelProviderAdapter(Protocol):
+    interface: str
+
+    def query_with_metrics(self, target: ResolvedModel, query: str) -> ModelCallResult:
+        """Execute one model query and return text + call metrics."""
+
+    def request_kwargs_for_summary(self, target: ResolvedModel) -> dict[str, object]:
+        """Build stable request config summary for reporting."""
 
 
 def run_query_with_retries(
@@ -55,13 +46,6 @@ def run_query_with_retries(
     log: logging.Logger,
     validate: Callable[[object], None] | None = None,
 ) -> object | None:
-    """
-    Esegue adapter(model, query) con retry e backoff esponenziale.
-
-    `validate` puo' sollevare per forzare il retry su risposte non valide
-    (es. testo vuoto). Gli errori non recuperabili interrompono subito i
-    tentativi; in ogni caso di fallimento il risultato e' None.
-    """
     for attempt in range(1, max_retries + 1):
         try:
             result = adapter(model, query)
@@ -112,156 +96,115 @@ def require_answer_text(answer: str) -> None:
         raise ValueError("Risposta vuota dal modello.")
 
 
-def query_anthropic(model: str, query: str) -> str:
-    return query_anthropic_with_metrics(model, query).text
+class AnthropicAdapter:
+    interface = "anthropic"
 
-
-def query_anthropic_with_metrics(model: str, query: str) -> ModelCallResult:
-    target = resolve_model("anthropic", model)
-    client = create_anthropic_client(target)
-    started_at = time.perf_counter()
-    request = default_anthropic_message_kwargs(model, query)
-    request["model"] = target.api_model
-    response = stream_anthropic_message(
-        client,
-        logger=log,
-        config_module=benchmark_config,
-        model=model,
-        model_max_tokens=MODEL_MAX_TOKENS,
-        request=request,
-    )
-    text = anthropic_response_text(response)
-    if not text:
-        content_types = [
-            getattr(block, "type", type(block).__name__)
-            for block in getattr(response, "content", []) or []
-        ]
-        raise ValueError(
-            "Risposta Anthropic priva di blocchi testuali finali "
-            f"(content_types={content_types})."
+    def query_with_metrics(self, target: ResolvedModel, query: str) -> ModelCallResult:
+        client = create_anthropic_client(target)
+        started_at = time.perf_counter()
+        request = anthropic_message_kwargs(target.logical_model, query, MODEL_MAX_TOKENS)
+        request["model"] = target.api_model
+        response = stream_anthropic_message(
+            client,
+            logger=log,
+            config_module=benchmark_config,
+            model=target.logical_model,
+            model_max_tokens=MODEL_MAX_TOKENS,
+            request=request,
         )
-    return ModelCallResult(
-        text=text,
-        metrics=build_model_call_metrics(
-            provider="anthropic",
-            model=model,
-            latency_ms_value=latency_ms(started_at),
-            usage=extract_usage(response),
-        ),
-    )
+        text = anthropic_response_text(response)
+        if not text:
+            content_types = [
+                getattr(block, "type", type(block).__name__)
+                for block in getattr(response, "content", []) or []
+            ]
+            raise ValueError(
+                "Risposta Anthropic priva di blocchi testuali finali "
+                f"(content_types={content_types})."
+            )
+        return ModelCallResult(
+            text=text,
+            metrics=build_model_call_metrics(
+                provider=target.namespace,
+                model=target.logical_model,
+                latency_ms_value=latency_ms(started_at),
+                usage=extract_usage(response),
+                namespace=target.namespace,
+                latency_ms_for_hourly=latency_ms(started_at),
+            ),
+        )
+
+    def request_kwargs_for_summary(self, target: ResolvedModel) -> dict[str, object]:
+        request = anthropic_message_kwargs(target.logical_model, "", MODEL_MAX_TOKENS)
+        request["model"] = target.api_model
+        return request
 
 
-def default_anthropic_message_kwargs(model: str, query: str) -> dict[str, object]:
-    return anthropic_message_kwargs(model, query, MODEL_MAX_TOKENS)
+class BedrockAnthropicAdapter(AnthropicAdapter):
+    interface = "bedrock-anthropic"
 
 
-def query_openai(model: str, query: str) -> str:
-    return query_openai_with_metrics(model, query).text
+class OpenAIAdapter:
+    interface = "openai"
+
+    def query_with_metrics(self, target: ResolvedModel, query: str) -> ModelCallResult:
+        client = create_openai_client(target)
+        started_at = time.perf_counter()
+        request = openai_completion_kwargs(target.logical_model, query, MODEL_MAX_TOKENS)
+        request["model"] = target.api_model
+        response = client.chat.completions.create(**request)
+        content = response.choices[0].message.content
+        if content is None:
+            raise ValueError("Risposta OpenAI priva di contenuto testuale.")
+        elapsed = latency_ms(started_at)
+        return ModelCallResult(
+            text=content.strip(),
+            metrics=build_model_call_metrics(
+                provider=target.namespace,
+                model=target.logical_model,
+                latency_ms_value=elapsed,
+                usage=extract_usage(response),
+                namespace=target.namespace,
+                latency_ms_for_hourly=elapsed,
+            ),
+        )
+
+    def request_kwargs_for_summary(self, target: ResolvedModel) -> dict[str, object]:
+        request = openai_completion_kwargs(target.logical_model, "", MODEL_MAX_TOKENS)
+        request["model"] = target.api_model
+        return request
 
 
-def query_openai_with_metrics(model: str, query: str) -> ModelCallResult:
-    target = resolve_model("openai", model)
-    client = create_openai_client(target)
-    started_at = time.perf_counter()
-    request = default_openai_completion_kwargs(model, query)
-    request["model"] = target.api_model
-    response = client.chat.completions.create(**request)
-    content = response.choices[0].message.content
-    if content is None:
-        raise ValueError("Risposta OpenAI priva di contenuto testuale.")
-    return ModelCallResult(
-        text=content.strip(),
-        metrics=build_model_call_metrics(
-            provider="openai",
-            model=model,
-            latency_ms_value=latency_ms(started_at),
-            usage=extract_usage(response),
-        ),
-    )
+class BedrockOpenAIAdapter(OpenAIAdapter):
+    interface = "bedrock-openai"
 
 
-def default_openai_completion_kwargs(model: str, query: str) -> dict[str, object]:
-    return openai_completion_kwargs(model, query, MODEL_MAX_TOKENS)
+_ADAPTER_REGISTRY: dict[str, ModelProviderAdapter] = {
+    "anthropic": AnthropicAdapter(),
+    "openai": OpenAIAdapter(),
+    "bedrock-anthropic": BedrockAnthropicAdapter(),
+    "bedrock-openai": BedrockOpenAIAdapter(),
+}
 
 
-def query_gemini(model: str, query: str) -> str:
-    return query_gemini_with_metrics(model, query).text
+def get_model_adapter(target: ResolvedModel) -> ModelProviderAdapter:
+    adapter = _ADAPTER_REGISTRY.get(target.interface)
+    if adapter is None:
+        raise RuntimeError(f"Interfaccia provider non supportata: {target.interface}")
+    return adapter
 
 
-def default_gemini_completion_kwargs(model: str, query: str) -> dict[str, object]:
-    return gemini_completion_kwargs(model, query, MODEL_MAX_TOKENS)
+def query_model_with_metrics(model: str, query: str) -> ModelCallResult:
+    target = resolve_model(model)
+    adapter = get_model_adapter(target)
+    return adapter.query_with_metrics(target, query)
 
 
-def query_gemini_with_metrics(model: str, query: str) -> ModelCallResult:
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY non impostata in .env")
-
-    client = openai.OpenAI(api_key=api_key, base_url=GEMINI_BASE_URL)
-    started_at = time.perf_counter()
-    response = client.chat.completions.create(**default_gemini_completion_kwargs(model, query))
-    choice = response.choices[0]
-    if getattr(choice, "finish_reason", None) == "length":
-        log.warning("Risposta %s troncata dal provider: finish_reason=length", model)
-    content = choice.message.content
-    if content is None:
-        raise ValueError("Risposta Gemini priva di contenuto testuale.")
-    return ModelCallResult(
-        text=content.strip(),
-        metrics=build_model_call_metrics(
-            provider="google",
-            model=model,
-            latency_ms_value=latency_ms(started_at),
-            usage=extract_usage(response),
-        ),
-    )
-
-
-def default_novita_completion_kwargs(model: str, query: str) -> dict[str, object]:
-    return novita_completion_kwargs(
-        model,
-        query,
-        max_tokens=MODEL_MAX_TOKENS,
-        glm_max_tokens=NOVITA_GLM_52_MAX_TOKENS,
-    )
-
-
-def query_novita(model: str, query: str) -> str:
-    return query_novita_with_metrics(model, query).text
-
-
-def query_novita_with_metrics(model: str, query: str) -> ModelCallResult:
-    api_key = os.environ.get("NOVITA_API_KEY")
-    if not api_key:
-        raise RuntimeError("NOVITA_API_KEY non impostata in .env")
-
-    client = openai.OpenAI(api_key=api_key, base_url=NOVITA_BASE_URL)
-    started_at = time.perf_counter()
-    response = client.chat.completions.create(**default_novita_completion_kwargs(model, query))
-    choice = response.choices[0]
-    if getattr(choice, "finish_reason", None) == "length":
-        log.warning("Risposta %s troncata dal provider: finish_reason=length", model)
-    content = choice.message.content
-    if content is None:
-        raise ValueError("Risposta Novita priva di contenuto testuale.")
-    return ModelCallResult(
-        text=content.strip(),
-        metrics=build_model_call_metrics(
-            provider="novita",
-            model=model,
-            latency_ms_value=latency_ms(started_at),
-            usage=extract_usage(response),
-        ),
-    )
+def query_model(model: str, query: str) -> str:
+    return query_model_with_metrics(model, query).text
 
 
 def model_request_kwargs_for_summary(model: str) -> dict[str, object]:
-    if model.startswith(NOVITA_PROVIDERS):
-        return default_novita_completion_kwargs(model, "")
-    if model.startswith(GEMINI_PROVIDER_PREFIX):
-        return default_gemini_completion_kwargs(model, "")
-    if model.startswith("claude"):
-        return default_anthropic_message_kwargs(model, "")
-    if any(model.startswith(prefix) for prefix in ("gpt", "o1", "o3", "o4")):
-        return default_openai_completion_kwargs(model, "")
-    return {"model": model}
+    target = resolve_model(model)
+    adapter = get_model_adapter(target)
+    return adapter.request_kwargs_for_summary(target)

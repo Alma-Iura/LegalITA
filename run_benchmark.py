@@ -14,8 +14,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-import anthropic
-import openai
 from dotenv import load_dotenv
 
 from config import (
@@ -37,35 +35,16 @@ except ImportError:
     DEFAULT_INDEX_ENV = None
     PineconeCitationResolver = None
     CitationExistenceService = None
-from evaluation.judge import Judge, create_judge_from_config
+from evaluation.judge import create_judge_from_config
 from evaluation.scoring import score_batch, summarize_batch_scores
 from model_query import (
-    GEMINI_BASE_URL,
-    GEMINI_PROVIDER_PREFIX,
-    NOVITA_BASE_URL,
-    NOVITA_GLM_52_MAX_TOKENS,
-    NOVITA_PROVIDERS,
-    default_anthropic_message_kwargs as _anthropic_message_kwargs,
-    default_gemini_completion_kwargs as _gemini_completion_kwargs,
-    default_novita_completion_kwargs as _novita_completion_kwargs,
-    default_openai_completion_kwargs as _openai_completion_kwargs,
     model_request_kwargs_for_summary as _model_request_kwargs_for_summary,
-    query_anthropic as _query_anthropic,
-    query_anthropic_with_metrics as _query_anthropic_with_metrics,
-    query_gemini as _query_gemini,
-    query_gemini_with_metrics as _query_gemini_with_metrics,
-    query_novita as _query_novita,
-    query_novita_with_metrics as _query_novita_with_metrics,
-    query_openai as _query_openai,
-    query_openai_with_metrics as _query_openai_with_metrics,
+    query_model as _query_model,
+    query_model_with_metrics as _query_model_with_metrics,
     require_result_text,
     run_query_with_retries,
 )
 from model_request_config import request_config_for_summary
-from model_runtime import (
-    ANTHROPIC_STREAMING_REQUIRED_ERROR,
-    anthropic_response_text as _anthropic_response_text,
-)
 from schemas import BenchmarkTask, TaskScore
 from taxonomy import normalize_macro_area
 from usage_tracking import (
@@ -141,25 +120,7 @@ def load_tasks(
 
 
 def query_model(model: str, query: str, max_retries: int = MODEL_RETRIES) -> str | None:
-    """
-    Manda la query al modello e restituisce la risposta.
-
-    Supporta modelli Anthropic, OpenAI, Gemini e modelli serviti via Novita.
-    Il routing per prefisso resta locale al modulo, cosi' i test possono
-    sostituire i singoli adapter via monkeypatch.
-    """
-    if model.startswith(NOVITA_PROVIDERS):
-        adapter = _query_novita
-    elif model.startswith(GEMINI_PROVIDER_PREFIX):
-        adapter = _query_gemini
-    elif model.startswith("claude"):
-        adapter = _query_anthropic
-    elif any(model.startswith(prefix) for prefix in ("gpt", "o1", "o3", "o4")):
-        adapter = _query_openai
-    else:
-        raise ValueError(f"Modello non supportato: {model}")
-
-    return run_query_with_retries(adapter, model, query, max_retries=max_retries, log=log)
+    return run_query_with_retries(_query_model, model, query, max_retries=max_retries, log=log)
 
 
 def query_model_with_metrics(
@@ -167,19 +128,8 @@ def query_model_with_metrics(
     query: str,
     max_retries: int = MODEL_RETRIES,
 ) -> ModelCallResult | None:
-    if model.startswith(NOVITA_PROVIDERS):
-        adapter = _query_novita_with_metrics
-    elif model.startswith(GEMINI_PROVIDER_PREFIX):
-        adapter = _query_gemini_with_metrics
-    elif model.startswith("claude"):
-        adapter = _query_anthropic_with_metrics
-    elif any(model.startswith(prefix) for prefix in ("gpt", "o1", "o3", "o4")):
-        adapter = _query_openai_with_metrics
-    else:
-        raise ValueError(f"Modello non supportato: {model}")
-
     return run_query_with_retries(
-        adapter,
+        _query_model_with_metrics,
         model,
         query,
         max_retries=max_retries,
@@ -250,11 +200,8 @@ def run(
     limit: int | None = None,
     judge_model: str = JUDGE_MODEL,
     judge_strategy: str | None = None,
-    judge_a_provider: str | None = None,
     judge_a_model: str | None = None,
-    judge_b_provider: str | None = None,
     judge_b_model: str | None = None,
-    judge_c_provider: str | None = None,
     judge_c_model: str | None = None,
     delay_between: float = 0.3,
     skip_citation_grounding: bool = False,
@@ -267,21 +214,15 @@ def run(
     )
     judge_config = build_judge_runtime_config(
         judge_strategy=judge_strategy,
-        judge_a_provider=judge_a_provider,
         judge_a_model=judge_a_model,
-        judge_b_provider=judge_b_provider,
         judge_b_model=judge_b_model,
-        judge_c_provider=judge_c_provider,
         judge_c_model=judge_c_model,
         legacy_judge_model=judge_model,
     )
     validate_judge_runtime_config(judge_config)
 
     tasks = load_tasks(area=area, limit=limit)
-    if judge_config.strategy == "single" and judge_config.judge_a.provider == "anthropic":
-        judge = Judge(model=judge_config.judge_a.model)
-    else:
-        judge = create_judge_from_config(judge_config)
+    judge = create_judge_from_config(judge_config)
     citation_service: CitationExistenceService | None = None
     log.info(
         "Judge strategy: %s | A=%s/%s | B=%s/%s | C=%s/%s",
@@ -365,8 +306,8 @@ if __name__ == "__main__":
         required=True,
         help=(
             "Modelli da valutare "
-            "(es. gpt-4o claude-sonnet-4-6 gemini-2.5-pro "
-            "deepseek/deepseek-v4-pro zai-org/glm-5.2)."
+            "(es. openai:gpt-5.5 anthropic:claude-sonnet-4-6 "
+            "bedrock-anthropic:claude-sonnet-4-6)."
         ),
     )
     parser.add_argument(
@@ -385,7 +326,7 @@ if __name__ == "__main__":
         "--judge",
         type=str,
         default=JUDGE_MODEL,
-        help="Alias legacy per il modello del Judge A (default: da config.py).",
+        help="Alias legacy per il modello del Judge A (default: da config.py, formato namespace:model).",
     )
     parser.add_argument(
         "--judge-strategy",
@@ -393,26 +334,8 @@ if __name__ == "__main__":
         default=None,
         help="Strategia judge: single oppure adaptive_majority.",
     )
-    parser.add_argument(
-        "--judge-a-provider",
-        choices=["anthropic", "openai"],
-        default=None,
-        help="Provider Judge A.",
-    )
     parser.add_argument("--judge-a-model", default=None, help="Modello Judge A.")
-    parser.add_argument(
-        "--judge-b-provider",
-        choices=["anthropic", "openai"],
-        default=None,
-        help="Provider Judge B.",
-    )
     parser.add_argument("--judge-b-model", default=None, help="Modello Judge B.")
-    parser.add_argument(
-        "--judge-c-provider",
-        choices=["anthropic", "openai"],
-        default=None,
-        help="Provider Judge C.",
-    )
     parser.add_argument("--judge-c-model", default=None, help="Modello Judge C.")
     parser.add_argument(
         "--skip-citation-grounding",
@@ -432,11 +355,8 @@ if __name__ == "__main__":
         limit=args.limit,
         judge_model=args.judge,
         judge_strategy=args.judge_strategy,
-        judge_a_provider=args.judge_a_provider,
         judge_a_model=args.judge_a_model,
-        judge_b_provider=args.judge_b_provider,
         judge_b_model=args.judge_b_model,
-        judge_c_provider=args.judge_c_provider,
         judge_c_model=args.judge_c_model,
         skip_citation_grounding=args.skip_citation_grounding,
         strict_citation_grounding=args.strict_citation_grounding,

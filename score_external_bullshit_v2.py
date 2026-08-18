@@ -169,11 +169,8 @@ def run_external_csv(
     area: str | None = None,
     limit: int | None = None,
     judge_strategy: str | None = None,
-    judge_a_provider: str | None = None,
     judge_a_model: str | None = None,
-    judge_b_provider: str | None = None,
     judge_b_model: str | None = None,
-    judge_c_provider: str | None = None,
     judge_c_model: str | None = None,
     question_column: str | None = None,
     answer_column: str | None = None,
@@ -200,11 +197,8 @@ def run_external_csv(
         out_dir=out_dir,
         judge=judge,
         judge_strategy=judge_strategy,
-        judge_a_provider=judge_a_provider,
         judge_a_model=judge_a_model,
-        judge_b_provider=judge_b_provider,
         judge_b_model=judge_b_model,
-        judge_c_provider=judge_c_provider,
         judge_c_model=judge_c_model,
         summary_extra={
             "source_csv": str(csv_path),
@@ -226,13 +220,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--csv", type=Path, required=True, help="CSV con domande e risposte.")
     parser.add_argument("--model", type=str, required=True, help="Nome modello/sistema valutato.")
-    parser.add_argument("--judge", type=str, default=JUDGE_MODEL, help="Alias legacy per il modello del Judge A.")
+    parser.add_argument(
+        "--judge",
+        type=str,
+        default=JUDGE_MODEL,
+        help="Alias legacy per il modello del Judge A (formato namespace:model).",
+    )
     parser.add_argument("--judge-strategy", choices=["single", "adaptive_majority"], default=None)
-    parser.add_argument("--judge-a-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-a-model", default=None)
-    parser.add_argument("--judge-b-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-b-model", default=None)
-    parser.add_argument("--judge-c-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-c-model", default=None)
     parser.add_argument("--gold", type=Path, default=BULLSHIT_GOLD_PATH, help="Gold corrente bullshit v3.")
     parser.add_argument("--area", type=str, default=None, help="Filtra macro-area.")
@@ -254,11 +250,8 @@ def main(argv: list[str] | None = None) -> None:
         area=args.area,
         limit=args.limit,
         judge_strategy=args.judge_strategy,
-        judge_a_provider=args.judge_a_provider,
         judge_a_model=args.judge_a_model,
-        judge_b_provider=args.judge_b_provider,
         judge_b_model=args.judge_b_model,
-        judge_c_provider=args.judge_c_provider,
         judge_c_model=args.judge_c_model,
         question_column=args.question_column,
         answer_column=args.answer_column,

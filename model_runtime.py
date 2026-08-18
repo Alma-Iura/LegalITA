@@ -47,9 +47,10 @@ def is_non_retryable_model_error(exc: Exception) -> bool:
         return True
     if isinstance(exc, RuntimeError) and (
         "API_KEY non impostata" in message
-        or "AWS_BEARER_TOKEN_BEDROCK" in message
-        or "non mappato su Amazon Bedrock" in message
-        or "LLM_BACKEND=" in message
+        or "namespace:model" in message
+        or "Namespace provider sconosciuto" in message
+        or "Registry provider" in message
+        or "variabile ambiente" in message
     ):
         return True
     return False

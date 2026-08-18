@@ -2,17 +2,9 @@
 
 from __future__ import annotations
 
-import json
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
-
-
-PRICE_ENV_NAMES = (
-    "MODEL_PRICING_USD_PER_1M",
-    "MODEL_PRICING_USD_PER_MILLION",
-)
 
 MODEL_CALL_SCORE_FIELDS = (
     "model_call_provider",
@@ -126,9 +118,17 @@ def build_model_call_metrics(
     model: str,
     latency_ms_value: int,
     usage: dict[str, Any],
+    namespace: str | None = None,
+    latency_ms_for_hourly: int | None = None,
 ) -> dict[str, Any]:
     tokens = normalized_token_usage(usage)
-    cost, source = estimate_cost_usd(provider=provider, model=model, token_usage=tokens)
+    cost, source = estimate_cost_usd(
+        provider=provider,
+        model=model,
+        token_usage=tokens,
+        namespace=namespace,
+        latency_ms_value=latency_ms_for_hourly if latency_ms_for_hourly is not None else latency_ms_value,
+    )
     return {
         "provider": provider,
         "model": model,
@@ -206,19 +206,42 @@ def estimate_cost_usd(
     provider: str,
     model: str,
     token_usage: dict[str, int | None],
+    namespace: str | None = None,
+    latency_ms_value: int | None = None,
 ) -> tuple[float | None, str | None]:
-    price, source = _lookup_price(provider, model)
-    if not price:
+    pricing, source = _lookup_price(provider, model, namespace=namespace)
+    if not pricing:
         return None, None
+
+    mode = pricing.get("mode")
+    models = pricing.get("models")
+    if not isinstance(models, dict):
+        return None, source
+
+    resolved = models.get(model)
+    if not isinstance(resolved, dict):
+        if mode == "hourly":
+            resolved = models.get("default")
+    if not isinstance(resolved, dict):
+        return None, source
+
+    if mode == "hourly":
+        hourly = resolved.get("cost_per_hour")
+        if not isinstance(hourly, (int, float)):
+            return None, source
+        if latency_ms_value is None:
+            return None, source
+        hours = max(0.0, float(latency_ms_value)) / 3_600_000.0
+        return round(hours * float(hourly), 8), source
 
     input_tokens = token_usage.get("input_tokens") or 0
     output_tokens = token_usage.get("output_tokens") or 0
     cached_input_tokens = min(token_usage.get("cached_input_tokens") or 0, input_tokens)
     regular_input_tokens = input_tokens
 
-    input_price = _price_value(price, "input")
-    output_price = _price_value(price, "output")
-    cached_input_price = _price_value(price, "cached_input")
+    input_price = _price_value(resolved, "input")
+    output_price = _price_value(resolved, "output")
+    cached_input_price = _price_value(resolved, "cached_input")
 
     cost = 0.0
     if cached_input_price is not None:
@@ -232,36 +255,19 @@ def estimate_cost_usd(
     return round(cost, 8), source
 
 
-def _lookup_price(provider: str, model: str) -> tuple[dict[str, Any] | None, str | None]:
-    table, source = _load_price_table()
-    if not table:
+def _lookup_price(
+    provider: str,
+    model: str,
+    *,
+    namespace: str | None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    from provider_runtime import get_namespace_pricing
+
+    lookup_namespace = namespace or provider
+    pricing = get_namespace_pricing(lookup_namespace)
+    if not isinstance(pricing, dict):
         return None, None
-    keys = (
-        model,
-        model.replace("/", "-"),
-        f"{provider}/{model}",
-        f"{provider}:{model}",
-        provider,
-    )
-    for key in keys:
-        value = table.get(key)
-        if isinstance(value, dict):
-            return value, source
-    return None, None
-
-
-def _load_price_table() -> tuple[dict[str, Any], str | None]:
-    for name in PRICE_ENV_NAMES:
-        raw = os.environ.get(name)
-        if not raw:
-            continue
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}, name
-        if isinstance(parsed, dict):
-            return parsed, name
-    return {}, None
+    return pricing, f"registry:{lookup_namespace}"
 
 
 def _price_value(price: dict[str, Any], name: str) -> float | None:

@@ -366,7 +366,7 @@ class TaskBuilder:
         self.tasks_dir = tasks_dir
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.target = resolve_model("anthropic", model)
+        self.target = resolve_model(model)
         self.client = create_anthropic_client(self.target)
 
         # contatore progressivo per macro_area

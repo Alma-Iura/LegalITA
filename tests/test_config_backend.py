@@ -1,51 +1,77 @@
 from __future__ import annotations
 
 import os
+import tempfile
+import textwrap
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from config import build_judge_runtime_config, validate_judge_runtime_config
 
 
+REGISTRY_YAML = textwrap.dedent(
+    """
+    anthropic:
+      interface: anthropic
+      api_key_env: ANTHROPIC_API_KEY
+    openai:
+      interface: openai
+      api_key_env: OPENAI_API_KEY
+    bedrock-anthropic:
+      interface: bedrock-anthropic
+      api_key_env: AWS_BEARER_TOKEN_BEDROCK
+      region: us-east-2
+      prefix: us.anthropic.
+    bedrock-openai:
+      interface: bedrock-openai
+      api_key_env: AWS_BEARER_TOKEN_BEDROCK
+      region: us-east-2
+      prefix: openai.
+    """
+).strip()
+
+
 class ConfigBackendTests(unittest.TestCase):
-    def test_native_validation_preserves_existing_api_key_requirements(self) -> None:
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.registry_path = Path(self.tmpdir.name) / ".env.providers.yaml"
+        self.registry_path.write_text(REGISTRY_YAML, encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.tmpdir.cleanup()
+
+    def test_namespaced_models_validate(self) -> None:
         env = {
-            "LLM_BACKEND": "native",
+            "LLM_PROVIDER_REGISTRY": str(self.registry_path),
             "ANTHROPIC_API_KEY": "anthropic-test",
             "OPENAI_API_KEY": "openai-test",
+            "JUDGE_A_MODEL": "anthropic:claude-sonnet-4-6",
+            "JUDGE_B_MODEL": "openai:gpt-5.5",
+            "JUDGE_C_MODEL": "bedrock-anthropic:claude-opus-4-8",
+            "AWS_BEARER_TOKEN_BEDROCK": "bedrock-test",
         }
         with patch.dict(os.environ, env, clear=True):
             validate_judge_runtime_config(build_judge_runtime_config())
 
-    def test_bedrock_validation_uses_one_bedrock_key(self) -> None:
+    def test_legacy_provider_inputs_are_rejected(self) -> None:
         env = {
-            "LLM_BACKEND": "bedrock",
-            "AWS_BEARER_TOKEN_BEDROCK": "bedrock-test",
-            "BEDROCK_REGION": "us-east-2",
-            "BEDROCK_ANTHROPIC_SCOPE": "us",
+            "LLM_PROVIDER_REGISTRY": str(self.registry_path),
+            "JUDGE_A_PROVIDER": "anthropic",
+            "JUDGE_A_MODEL": "anthropic:claude-sonnet-4-6",
         }
         with patch.dict(os.environ, env, clear=True):
-            validate_judge_runtime_config(build_judge_runtime_config())
+            with self.assertRaisesRegex(RuntimeError, r"JUDGE_\[A\|B\|C\]_PROVIDER"):
+                build_judge_runtime_config()
 
-    def test_bedrock_validation_rejects_missing_key(self) -> None:
+    def test_non_namespaced_model_is_rejected(self) -> None:
         env = {
-            "LLM_BACKEND": "bedrock",
-            "BEDROCK_REGION": "us-east-2",
+            "LLM_PROVIDER_REGISTRY": str(self.registry_path),
+            "JUDGE_A_MODEL": "claude-sonnet-4-6",
         }
         with patch.dict(os.environ, env, clear=True):
-            with self.assertRaisesRegex(RuntimeError, "AWS_BEARER_TOKEN_BEDROCK"):
-                validate_judge_runtime_config(build_judge_runtime_config())
-
-    def test_bedrock_validation_rejects_unmapped_judge(self) -> None:
-        env = {
-            "LLM_BACKEND": "bedrock",
-            "AWS_BEARER_TOKEN_BEDROCK": "bedrock-test",
-            "BEDROCK_REGION": "us-east-2",
-        }
-        with patch.dict(os.environ, env, clear=True):
-            config = build_judge_runtime_config(judge_b_model="gpt-4o")
-            with self.assertRaisesRegex(RuntimeError, "non mappato su Amazon Bedrock"):
-                validate_judge_runtime_config(config)
+            with self.assertRaisesRegex(RuntimeError, "namespace:model"):
+                build_judge_runtime_config()
 
 
 if __name__ == "__main__":

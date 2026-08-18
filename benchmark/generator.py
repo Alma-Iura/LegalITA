@@ -222,7 +222,7 @@ class QueryGenerator:
         self.model = model
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.target = resolve_model("anthropic", model)
+        self.target = resolve_model(model)
         self.client = create_anthropic_client(self.target)
 
     def _build_prompt(self, provvedimento: Provvedimento) -> str:

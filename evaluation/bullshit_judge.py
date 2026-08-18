@@ -425,7 +425,7 @@ class AnthropicBullshitJudge:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.target = resolve_model("anthropic", model)
+        self.target = resolve_model(model)
         self.client = client or create_anthropic_client(self.target)
 
     def evaluate_vote(
@@ -538,7 +538,7 @@ class OpenAIBullshitJudge:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.target = resolve_model("openai", model)
+        self.target = resolve_model(model)
         self.client = client or create_openai_client(self.target)
 
     def evaluate_vote(
@@ -565,7 +565,7 @@ class OpenAIBullshitJudge:
                     "store": False,
                     **_temperature_kwargs(self.provider, self.model, self.temperature),
                 }
-                if self.target.backend == "bedrock":
+                if self.target.interface == "bedrock-openai":
                     response = self.client.responses.create(**request)
                     refusal = _openai_refusal(response)
                     if refusal:
@@ -1083,11 +1083,12 @@ def _bullshit_judge_diagnostics(
 
 
 def _build_bullshit_adapter(endpoint: Any) -> BullshitJudgeAdapter:
-    if endpoint.provider == "anthropic":
+    target = resolve_model(endpoint.model)
+    if target.interface in ("anthropic", "bedrock-anthropic"):
         return AnthropicBullshitJudge(judge_id=endpoint.judge_id, model=endpoint.model)
-    if endpoint.provider == "openai":
+    if target.interface in ("openai", "bedrock-openai"):
         return OpenAIBullshitJudge(judge_id=endpoint.judge_id, model=endpoint.model)
-    raise ValueError(f"Provider judge non supportato: {endpoint.provider}")
+    raise ValueError(f"Provider judge non supportato per modello {endpoint.model!r}")
 
 
 def create_bullshit_judge_from_config(
@@ -1100,7 +1101,8 @@ def create_bullshit_judge_from_config(
     config = runtime_config or build_judge_runtime_config(**overrides)
     validate_judge_runtime_config(config)
     if config.strategy == "single":
-        if config.judge_a.provider == "anthropic":
+        target = resolve_model(config.judge_a.model)
+        if target.interface in ("anthropic", "bedrock-anthropic"):
             return BullshitJudge(model=config.judge_a.model)
         return SingleBullshitVoteJudge(_build_bullshit_adapter(config.judge_a))
     return AdaptiveMajorityBullshitJudge(

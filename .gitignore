@@ -10,6 +10,7 @@ _incoming/
 .env
 .env.*
 !.env.example
+!.env.providers.example.yaml
 
 # Package / build
 *.egg-info/

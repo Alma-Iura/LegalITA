@@ -302,7 +302,7 @@ class AnthropicJudge:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.target = resolve_model("anthropic", model)
+        self.target = resolve_model(model)
         self.client = client or create_anthropic_client(self.target)
 
     def evaluate(
@@ -423,7 +423,7 @@ class OpenAIJudge:
         self.max_tokens = max_tokens
         self.max_retries = max_retries
         self.base_delay = base_delay
-        self.target = resolve_model("openai", model)
+        self.target = resolve_model(model)
         self.client = client or create_openai_client(self.target)
 
     def evaluate(
@@ -458,7 +458,7 @@ class OpenAIJudge:
                     "store": False,
                     **_temperature_kwargs(self.provider, self.model, self.temperature),
                 }
-                if self.target.backend == "bedrock":
+                if self.target.interface == "bedrock-openai":
                     # Bedrock Mantle does not guarantee the SDK's parse/text_format
                     # helper. The prompt already requires JSON, so parse and validate
                     # the normal Responses API text locally.
@@ -734,11 +734,12 @@ def _unresolved(votes: list[JudgeVote]) -> ConsensusResult:
 
 
 def _build_provider_judge(endpoint: Any) -> BaseJudge:
-    if endpoint.provider == "anthropic":
+    target = resolve_model(endpoint.model)
+    if target.interface in ("anthropic", "bedrock-anthropic"):
         return AnthropicJudge(judge_id=endpoint.judge_id, model=endpoint.model)
-    if endpoint.provider == "openai":
+    if target.interface in ("openai", "bedrock-openai"):
         return OpenAIJudge(judge_id=endpoint.judge_id, model=endpoint.model)
-    raise ValueError(f"Provider judge non supportato: {endpoint.provider}")
+    raise ValueError(f"Provider judge non supportato per modello {endpoint.model!r}")
 
 
 def create_judge_from_config(runtime_config: Any | None = None, **overrides: Any) -> BaseJudge | AdaptiveMajorityJudge:

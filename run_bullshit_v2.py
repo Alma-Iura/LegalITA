@@ -13,15 +13,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import random
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
-import anthropic
-import openai
 from dotenv import load_dotenv
 
 from config import (
@@ -42,33 +39,15 @@ from evaluation.bullshit_judge import (
     summarize_bullshit_scores,
 )
 from model_query import (
-    GEMINI_BASE_URL,
-    GEMINI_PROVIDER_PREFIX,
-    NOVITA_BASE_URL,
-    NOVITA_GLM_52_MAX_TOKENS,
-    NOVITA_PROVIDERS,
-    default_anthropic_message_kwargs as _anthropic_message_kwargs,
-    default_gemini_completion_kwargs as _gemini_completion_kwargs,
-    default_novita_completion_kwargs as _novita_completion_kwargs,
-    default_openai_completion_kwargs as _openai_completion_kwargs,
     model_request_kwargs_for_summary as _model_request_kwargs_for_summary,
-    query_anthropic as _query_anthropic,
-    query_anthropic_with_metrics as _query_anthropic_with_metrics,
-    query_gemini as _query_gemini,
-    query_gemini_with_metrics as _query_gemini_with_metrics,
-    query_novita as _query_novita,
-    query_novita_with_metrics as _query_novita_with_metrics,
-    query_openai as _query_openai,
-    query_openai_with_metrics as _query_openai_with_metrics,
+    query_model as _query_model,
+    query_model_with_metrics as _query_model_with_metrics,
     require_answer_text,
     require_result_text,
     run_query_with_retries,
 )
 from model_request_config import request_config_for_summary
-from model_runtime import (
-    ANTHROPIC_STREAMING_REQUIRED_ERROR,
-    anthropic_response_text as _anthropic_response_text,
-)
+from model_runtime import ANTHROPIC_STREAMING_REQUIRED_ERROR
 from usage_tracking import (
     ModelCallResult,
     score_model_dump,
@@ -123,26 +102,8 @@ def select_tasks(
 
 
 def query_model(model: str, query: str, max_retries: int = MODEL_RETRIES) -> str | None:
-    """
-    Interroga un modello supportato.
-
-    Gli adapter provider sono condivisi con il benchmark standard tramite
-    model_query; il routing per prefisso resta locale al modulo, cosi' i test
-    possono sostituire i singoli adapter via monkeypatch.
-    """
-    if model.startswith(NOVITA_PROVIDERS):
-        adapter = _query_novita
-    elif model.startswith(GEMINI_PROVIDER_PREFIX):
-        adapter = _query_gemini
-    elif model.startswith("claude"):
-        adapter = _query_anthropic
-    elif any(model.startswith(prefix) for prefix in ("gpt", "o1", "o3", "o4")):
-        adapter = _query_openai
-    else:
-        raise ValueError(f"Modello non supportato: {model}")
-
     answer = run_query_with_retries(
-        adapter,
+        _query_model,
         model,
         query,
         max_retries=max_retries,
@@ -157,19 +118,8 @@ def query_model_with_metrics(
     query: str,
     max_retries: int = MODEL_RETRIES,
 ) -> ModelCallResult | None:
-    if model.startswith(NOVITA_PROVIDERS):
-        adapter = _query_novita_with_metrics
-    elif model.startswith(GEMINI_PROVIDER_PREFIX):
-        adapter = _query_gemini_with_metrics
-    elif model.startswith("claude"):
-        adapter = _query_anthropic_with_metrics
-    elif any(model.startswith(prefix) for prefix in ("gpt", "o1", "o3", "o4")):
-        adapter = _query_openai_with_metrics
-    else:
-        raise ValueError(f"Modello non supportato: {model}")
-
     return run_query_with_retries(
-        adapter,
+        _query_model_with_metrics,
         model,
         query,
         max_retries=max_retries,
@@ -365,11 +315,8 @@ def score_and_save(
     out_dir: Path,
     judge: BullshitJudge | None = None,
     judge_strategy: str | None = None,
-    judge_a_provider: str | None = None,
     judge_a_model: str | None = None,
-    judge_b_provider: str | None = None,
     judge_b_model: str | None = None,
-    judge_c_provider: str | None = None,
     judge_c_model: str | None = None,
     model_call_metrics: dict[str, dict[str, object]] | None = None,
     summary_extra: dict | None = None,
@@ -377,11 +324,8 @@ def score_and_save(
     """Valuta output gia raccolti con il judge bullshit e salva score/summary."""
     judge = judge or create_bullshit_judge_from_config(
         judge_strategy=judge_strategy,
-        judge_a_provider=judge_a_provider,
         judge_a_model=judge_a_model,
-        judge_b_provider=judge_b_provider,
         judge_b_model=judge_b_model,
-        judge_c_provider=judge_c_provider,
         judge_c_model=judge_c_model,
         legacy_judge_model=judge_model,
     )
@@ -449,11 +393,8 @@ def run_models(
     results_dir: Path = RESULTS_DIR,
     judge_factory: Callable[[str], BullshitJudge] | None = None,
     judge_strategy: str | None = None,
-    judge_a_provider: str | None = None,
     judge_a_model: str | None = None,
-    judge_b_provider: str | None = None,
     judge_b_model: str | None = None,
-    judge_c_provider: str | None = None,
     judge_c_model: str | None = None,
 ) -> list[Path]:
     """Esegue una run separata per ciascun modello e restituisce le directory create."""
@@ -488,11 +429,8 @@ def run_models(
             out_dir=out_dir,
             judge=judge,
             judge_strategy=judge_strategy,
-            judge_a_provider=judge_a_provider,
             judge_a_model=judge_a_model,
-            judge_b_provider=judge_b_provider,
             judge_b_model=judge_b_model,
-            judge_c_provider=judge_c_provider,
             judge_c_model=judge_c_model,
             model_call_metrics=model_call_metrics,
         )
@@ -514,7 +452,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--judge",
         type=str,
         default=JUDGE_MODEL,
-        help="Alias legacy per il modello del Judge A (default: JUDGE_MODEL da config.py).",
+        help="Alias legacy per il modello del Judge A (default: JUDGE_MODEL da config.py, formato namespace:model).",
     )
     parser.add_argument(
         "--judge-strategy",
@@ -522,11 +460,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Strategia judge: single oppure adaptive_majority.",
     )
-    parser.add_argument("--judge-a-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-a-model", default=None)
-    parser.add_argument("--judge-b-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-b-model", default=None)
-    parser.add_argument("--judge-c-provider", choices=["anthropic", "openai"], default=None)
     parser.add_argument("--judge-c-model", default=None)
     parser.add_argument(
         "--gold",
@@ -583,11 +518,8 @@ def main(argv: list[str] | None = None) -> None:
             judge_model=args.judge,
             out_dir=args.score_outputs.parent,
             judge_strategy=args.judge_strategy,
-            judge_a_provider=args.judge_a_provider,
             judge_a_model=args.judge_a_model,
-            judge_b_provider=args.judge_b_provider,
             judge_b_model=args.judge_b_model,
-            judge_c_provider=args.judge_c_provider,
             judge_c_model=args.judge_c_model,
         )
         return
@@ -605,11 +537,8 @@ def main(argv: list[str] | None = None) -> None:
         delay_between=args.delay,
         generate_only=args.generate_only,
         judge_strategy=args.judge_strategy,
-        judge_a_provider=args.judge_a_provider,
         judge_a_model=args.judge_a_model,
-        judge_b_provider=args.judge_b_provider,
         judge_b_model=args.judge_b_model,
-        judge_c_provider=args.judge_c_provider,
         judge_c_model=args.judge_c_model,
     )
 
