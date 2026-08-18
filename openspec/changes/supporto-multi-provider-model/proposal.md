@@ -34,3 +34,4 @@ LegalITA currently routes LLM providers through duplicated, partially hardcoded 
 - Configuration impact: introduces `.env.providers.yaml` as required runtime input and deprecates legacy routing env knobs.
 - Dependency impact: YAML parsing dependency required for loading the provider registry.
 - Operational impact: model selection and judge endpoint config become explicitly namespaced and deterministic across cloud and self-hosted targets.
+- Documentation impact: public docs (`README.md`, `docs/CITATION_GROUNDING.md`) must be aligned to namespaced model syntax and registry-driven configuration, removing legacy backend/provider routing guidance.

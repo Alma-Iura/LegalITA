@@ -103,9 +103,12 @@ reasoning evaluation is unaffected.
 With the 107-task bundle and ordinary model/judge API keys:
 
 ```bash
-python run_benchmark.py --models gpt-4o --skip-citation-grounding
-python run_bullshit_v2.py --models gpt-4o
+python run_benchmark.py --models openai:gpt-5.5 --skip-citation-grounding
+python run_bullshit_v2.py --models openai:gpt-5.5
 ```
+
+Model targets use `namespace:model` and are resolved through
+`.env.providers.yaml`.
 
 ---
 
@@ -215,6 +218,9 @@ tramite judge non è influenzata.
 Con il pacchetto dei 107 task e normali API key di modello e judge:
 
 ```bash
-python run_benchmark.py --models gpt-4o --skip-citation-grounding
-python run_bullshit_v2.py --models gpt-4o
+python run_benchmark.py --models openai:gpt-5.5 --skip-citation-grounding
+python run_bullshit_v2.py --models openai:gpt-5.5
 ```
+
+I target modello usano il formato `namespace:model` e vengono risolti tramite
+`.env.providers.yaml`.

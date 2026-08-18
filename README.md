@@ -74,10 +74,10 @@ model and judge API credentials:
 
 ```bash
 # Run the 67-task case-law reasoning benchmark without citation grounding.
-python run_benchmark.py --models gpt-4o --skip-citation-grounding
+python run_benchmark.py --models openai:gpt-5.5 --skip-citation-grounding
 
 # Run the 40 missing-document detection tasks.
-python run_bullshit_v2.py --models gpt-4o
+python run_bullshit_v2.py --models openai:gpt-5.5
 ```
 
 The first command measures whether a model's answer satisfies the legal
@@ -85,9 +85,9 @@ PASS/FAIL criteria attached to each reasoning task. The second measures whether
 the model notices that documents invoked by the question were not supplied,
 instead of inventing their contents or giving document-specific advice.
 
-These runs still require credentials for the selected backend: first-party
-Anthropic/OpenAI keys in `native` mode, or an Amazon Bedrock API key in
-`bedrock` mode. Citation grounding and Structural Gold v3 are not
+These runs still require credentials for the namespaces selected in
+`.env.providers.yaml` (for example Anthropic/OpenAI keys, Bedrock token, or
+self-hosted gateway key). Citation grounding and Structural Gold v3 are not
 reproducible from this repository: their implementation depends on private
 Pinecone indexes, structured S3 documents, and deployment credentials, and is
 not distributed here. Always run the benchmark with
@@ -156,10 +156,10 @@ normali credenziali API del modello e dei judge:
 
 ```bash
 # Esegue i 67 task di ragionamento senza citation grounding.
-python run_benchmark.py --models gpt-4o --skip-citation-grounding
+python run_benchmark.py --models openai:gpt-5.5 --skip-citation-grounding
 
 # Esegue i 40 task di rilevazione dei documenti mancanti.
-python run_bullshit_v2.py --models gpt-4o
+python run_bullshit_v2.py --models openai:gpt-5.5
 ```
 
 Il primo comando misura se la risposta del modello soddisfa i criteri giuridici
@@ -168,9 +168,9 @@ che i documenti richiamati dalla domanda non sono stati forniti, invece di
 inventarne il contenuto o proporre una strategia fondata su atti che non ha
 potuto leggere.
 
-Le due esecuzioni richiedono credenziali per il backend configurato: chiavi
-Anthropic/OpenAI in modalita `native`, oppure una Amazon Bedrock API key in
-modalita `bedrock`. Il citation grounding e Structural Gold v3
+Le due esecuzioni richiedono credenziali per i namespace configurati nel
+registry provider (`.env.providers.yaml`), ad esempio chiavi Anthropic/OpenAI,
+token Bedrock o credenziali di endpoint self-hosted. Il citation grounding e Structural Gold v3
 non sono riproducibili da questo repository: la loro implementazione dipende
 da indici Pinecone privati, documenti strutturati in S3 e credenziali di
 deployment, e non è distribuita qui. Il benchmark va sempre eseguito con
@@ -184,41 +184,50 @@ della loro non replicabilità sono documentati in
 pip install -e .
 ```
 
-Pipelines that call Anthropic/OpenAI models support two runtime backends.
-Create a local `.env` file in the project root (see `.env.example`).
+Provider/model routing is registry-driven. Create a local `.env` file in the
+project root (see `.env.example`) and a `.env.providers.yaml` based on
+`.env.providers.example.yaml`.
 
-First-party APIs remain the backward-compatible default:
+`.env` contains credentials referenced by namespace entries and judge model
+selectors:
 
 ```text
-LLM_BACKEND=native
 ANTHROPIC_API_KEY=...
 OPENAI_API_KEY=...
-```
-
-Amazon Bedrock can be selected without native Anthropic/OpenAI API keys:
-
-```text
-LLM_BACKEND=bedrock
 AWS_BEARER_TOKEN_BEDROCK=...
-BEDROCK_REGION=us-east-2
-BEDROCK_ANTHROPIC_SCOPE=us
+GPU_OFFICE_API_KEY=...
+
+JUDGE_STRATEGY=adaptive_majority
+JUDGE_A_MODEL=anthropic:claude-sonnet-4-6
+JUDGE_B_MODEL=openai:gpt-5.5
+JUDGE_C_MODEL=anthropic:claude-opus-4-8
 ```
 
-In Bedrock mode LegalITA preserves the logical model names used by CLI/results
-and maps them only at request time:
+`.env.providers.yaml` defines namespace behavior (`interface`, endpoint
+options, credentials, pricing). Example namespaces included in
+`.env.providers.example.yaml`:
 
 ```text
-claude-sonnet-4-6 -> <scope>.anthropic.claude-sonnet-4-6
-claude-opus-4-8   -> <scope>.anthropic.claude-opus-4-8
-gpt-5.5           -> openai.gpt-5.5
+anthropic:
+  interface: anthropic
+openai:
+  interface: openai
+bedrock-anthropic:
+  interface: bedrock-anthropic
+  region: us-east-2
+  prefix: us.anthropic.
+bedrock-openai:
+  interface: bedrock-openai
+  region: us-east-2
+  prefix: openai.
+gpu-office:
+  interface: openai
+  base_url: https://llm-gateway.example.internal/v1
 ```
 
-Claude traffic uses Amazon Bedrock Runtime through the Anthropic Bedrock SDK;
-GPT-5.5 uses the Bedrock Mantle OpenAI-compatible endpoint derived from the
-selected Region. Gemini and Novita keep using their existing endpoints. Models
-without an explicit Bedrock mapping fail fast instead of silently changing
-provider or model identity. See `BEDROCK_CHANGES.md` for architecture, tests,
-limitations and official AWS references.
+All runtime model targets use `namespace:model` format. The namespace controls
+adapter dispatch and API model composition (for Bedrock interfaces, API model
+ID is computed as `prefix + model`).
 
 Pinecone index names, S3 bucket names, S3 prefixes, AWS profiles, and Aptus
 hosts are local deployment configuration. Provide them through environment
@@ -234,14 +243,11 @@ Default strategy:
 ```text
 JUDGE_STRATEGY=adaptive_majority
 
-JUDGE_A_PROVIDER=anthropic
-JUDGE_A_MODEL=claude-sonnet-4-6
+JUDGE_A_MODEL=anthropic:claude-sonnet-4-6
 
-JUDGE_B_PROVIDER=openai
-JUDGE_B_MODEL=gpt-5.5
+JUDGE_B_MODEL=openai:gpt-5.5
 
-JUDGE_C_PROVIDER=anthropic
-JUDGE_C_MODEL=claude-opus-4-8
+JUDGE_C_MODEL=anthropic:claude-opus-4-8
 ```
 
 Workflow:
@@ -260,8 +266,7 @@ Temporary single-judge mode:
 
 ```text
 JUDGE_STRATEGY=single
-JUDGE_A_PROVIDER=anthropic
-JUDGE_A_MODEL=claude-sonnet-4-6
+JUDGE_A_MODEL=anthropic:claude-sonnet-4-6
 ```
 
 Example run:
@@ -269,9 +274,9 @@ Example run:
 ```bash
 python run_benchmark.py --models gpt-4o --limit 1 --skip-citation-grounding \
   --judge-strategy adaptive_majority \
-  --judge-a-provider anthropic --judge-a-model claude-sonnet-4-6 \
-  --judge-b-provider openai --judge-b-model gpt-5.5 \
-  --judge-c-provider anthropic --judge-c-model claude-opus-4-8
+  --judge-a-model anthropic:claude-sonnet-4-6 \
+  --judge-b-model openai:gpt-5.5 \
+  --judge-c-model anthropic:claude-opus-4-8
 ```
 
 The theoretical judge-call cost is:
@@ -297,9 +302,9 @@ Smoke run for one bullshit task:
 ```bash
 python run_bullshit_v2.py --models gpt-4o --limit 1 \
   --judge-strategy adaptive_majority \
-  --judge-a-provider anthropic --judge-a-model claude-sonnet-4-6 \
-  --judge-b-provider openai --judge-b-model gpt-5.5 \
-  --judge-c-provider anthropic --judge-c-model claude-opus-4-8
+  --judge-a-model anthropic:claude-sonnet-4-6 \
+  --judge-b-model openai:gpt-5.5 \
+  --judge-c-model anthropic:claude-opus-4-8
 ```
 
 ## Citation Grounding and Structural Gold v3 (not distributed)
@@ -373,10 +378,10 @@ python -m benchmark.task_builder --area diritto_penale --n-per-area 20
 python -m benchmark.task_builder --area civile_generale --n-per-area 20
 
 # Run benchmark evaluation
-python run_benchmark.py --models gpt-4o claude-sonnet-4-6 gemini-2.5-pro
+python run_benchmark.py --models openai:gpt-5.5 anthropic:claude-sonnet-4-6 bedrock-openai:gpt-5.5
 
 # Run a single macro-area, filtered in memory
-python run_benchmark.py --models gemini-2.5-pro --area diritto_civile
+python run_benchmark.py --models anthropic:claude-sonnet-4-6 --area diritto_civile
 
 # Generate reports
 python charts.py --latest

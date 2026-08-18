@@ -82,6 +82,7 @@ See `proposal.md` for motivation. Current runtime behavior is spread across `pro
 - Keep persisted output shape unchanged, but widen strict provider literals where needed to `str`.
 - `config.py` judge runtime config stops using `JUDGE_[A|B|C]_PROVIDER`; each judge only reads namespaced `JUDGE_[A|B|C]_MODEL`.
 - CLI docs/help examples in runners update to namespaced models.
+- Public repository docs (`README.md`, `docs/CITATION_GROUNDING.md`) are updated to describe registry-driven provider selection and namespaced model targets, and to remove obsolete `LLM_BACKEND` / provider-routing instructions.
 
 **Alternatives considered:**
 - Rename persisted cost fields to EUR or neutral names: rejected now to avoid mixed historical semantics and migration burden.

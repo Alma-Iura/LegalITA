@@ -28,6 +28,7 @@
 - [x] 5.1 Update `.env.example` to reflect namespaced judge model configuration and remove obsolete backend/provider routing knobs.
 - [x] 5.2 Add `.env.providers.example.yaml` with representative `anthropic`, `openai`, `bedrock-anthropic`, `bedrock-openai`, and self-hosted hourly examples with no real secrets.
 - [x] 5.3 Widen strict provider literals in persisted-score schemas to `str` where required while preserving separate `provider` and `model` fields.
+- [x] 5.4 Update `README.md` and `docs/CITATION_GROUNDING.md` coherently: replace legacy backend/provider routing guidance with namespaced model selectors and provider-registry configuration examples.
 
 ## 6. Test coverage and validation
 
